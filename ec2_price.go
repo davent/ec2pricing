@@ -23,8 +23,6 @@ const CACHE_DIR string = "/tmp/.aws_pricing"
 
 const MAX_CACHE_AGE float64 = 86400
 
-const AWS_LOCATION string = "US West (Oregon)"
-
 type Offer struct {
 	FormatVersion   string `json:"formatVersion"`   // The version of the file format
 	Disclaimer      string `json:"disclaimer"`      // The disclaimers for the offer file
@@ -68,6 +66,7 @@ type Price struct {
 func main() {
 
 	// Command line arguments
+	region := flag.String("region", "us-west-2", "AWS Region")
 	instance_type := flag.String("type", "m4.4xlarge", "EC2 Instance type")
 	tenancy := flag.String("tenancy", "Shared", "EC2 Tenancy type")
 	operating_system := flag.String("os", "Linux", "EC2 Operating system")
@@ -87,7 +86,7 @@ func main() {
 	}
 
 	// Get the OnDemand price for an m4.4xlarge
-	price, err := GetEC2Price(*instance_type, *tenancy, *operating_system, *term)
+	price, err := GetEC2Price(*region, *instance_type, *tenancy, *operating_system, *term)
 	if err != nil {
 		log.Fatalf("Could not get EC2 Price: %s", err)
 	}
@@ -98,12 +97,12 @@ func main() {
 
 }
 
-func GetEC2Price(instance_type string, tenancy string, operating_system string, term string) (float64, error) {
+func GetEC2Price(region string, instance_type string, tenancy string, operating_system string, term string) (float64, error) {
 
 	var price_f float64
 
 	// Is this request in cache?
-	cache_file := CACHE_DIR + "/" + GetMD5Hash(instance_type+tenancy+operating_system+term)
+	cache_file := CACHE_DIR + "/" + GetMD5Hash(region+instance_type+tenancy+operating_system+term)
 	stat, err := os.Stat(cache_file)
 	if (err == nil) && (time.Since(stat.ModTime()).Seconds() < MAX_CACHE_AGE) {
 
@@ -130,7 +129,7 @@ func GetEC2Price(instance_type string, tenancy string, operating_system string, 
 		}
 
 		// First we get the SKU
-		sku, err := offer.GetSKU(instance_type, tenancy, operating_system)
+		sku, err := offer.GetSKU(region, instance_type, tenancy, operating_system)
 		if err != nil {
 			return 0, err
 		}
@@ -181,13 +180,19 @@ func (o *Offer) GetPrice(sku string, term string) (*Price, error) {
 
 }
 
-func (o *Offer) GetSKU(instance_type string, tenancy string, os string) (string, error) {
+func (o *Offer) GetSKU(region string, instance_type string, tenancy string, os string) (string, error) {
+
+	// Get Location string from supplied AWS region
+	location, err := AWSRegionToLocation(region)
+	if err != nil {
+		return "", err
+	}
 
 	// Get the SKU for the Instance Type
 	var sku string
 	for _, product := range o.Products {
 		if (product.Attributes["instanceType"] == instance_type) &&
-			(product.Attributes["location"] == AWS_LOCATION) &&
+			(product.Attributes["location"] == location) &&
 			(product.Attributes["tenancy"] == tenancy) &&
 			(product.Attributes["operatingSystem"] == os) {
 
@@ -266,4 +271,26 @@ func GetMD5Hash(text string) string {
 	hasher := md5.New()
 	hasher.Write([]byte(text))
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func AWSRegionToLocation(region string) (string, error) {
+	aws_locations := map[string]string{
+		"us-gov-west-1":  "AWS GovCloud (US)",
+		"ap-northeast-2": "Asia Pacific (Seoul)",
+		"ap-southeast-1": "Asia Pacific (Singapore)",
+		"ap-southeast-2": "Asia Pacific (Sydney)",
+		"ap-northeast-1": "Asia Pacific (Tokyo)",
+		"eu-central-1":   "EU (Frankfurt)",
+		"eu-west-1":      "EU (Ireland)",
+		"sa-east-1":      "South America (Sao Paulo)",
+		"us-east-1":      "US East (N. Virginia)",
+		"us-west-1":      "US West (N. California)",
+		"us-west-2":      "US West (Oregon)",
+	}
+
+	if location, ok := aws_locations[region]; ok {
+		return location, nil
+	} else {
+		return "", errors.New("No location string found for " + region + " region.")
+	}
 }
